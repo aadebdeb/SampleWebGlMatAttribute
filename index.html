@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Sample to use matrix as attribute in WebGL</title>
+    <style>
+      body {
+        margin: 0;
+        overflow: hidden;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="canvas"></canvas>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gl-matrix/2.8.1/gl-matrix-min.js" integrity="sha512-zhHQR0/H5SEBL3Wn6yYSaTTZej12z0hVZKOv3TwCUXT1z5qeqGcXJLLrbERYRScEDDpYIJhPC1fk31gqR783iQ==" crossorigin="anonymous"></script>
+    <script src="./utils.js"></script>
+    <script>
+      const canvas = document.getElementById('canvas');
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+
+      const vertShaderSource =
+`
+attribute vec3 aPosition;
+attribute vec3 aNormal;
+attribute mat4 aInstanceMatrix;
+attribute mat3 aInstanceNormalMatrix;
+attribute vec3 aInstanceColor;
+
+uniform mat4 uViewProjectionMatrix;
+
+varying vec3 vColor;
+varying vec3 vWorldNormal;
+
+void main() {
+  gl_Position = uViewProjectionMatrix * aInstanceMatrix * vec4(aPosition, 1.0);
+  vColor = aInstanceColor;
+  vWorldNormal = aInstanceNormalMatrix * aNormal;
+}
+`;
+
+      const fragShaderSource =
+`precision highp float;
+
+varying vec3 vColor;
+varying vec3 vWorldNormal;
+
+vec3 lightDir = normalize(vec3(0.3, 0.7, 0.5));
+vec3 lightColor = vec3(1.0);
+vec3 ambientLight = vec3(0.2);
+
+void main() {
+  vec3 color = vColor * (lightColor * clamp(dot(vWorldNormal, lightDir), 0.0, 1.0) + ambientLight);
+  gl_FragColor = vec4(color, 1.0);
+}
+`
+
+      const gl = canvas.getContext('webgl');
+      const extInstancedArray = gl.getExtension('ANGLE_instanced_arrays')
+      const extVertexArrayObject = gl.getExtension('OES_vertex_array_object');
+
+      gl.clearColor(0.7, 0.7, 0.7, 1.0);
+
+      const projectionMatrix = mat4.create();
+      mat4.perspective(projectionMatrix, 90.0 / 180.0 * Math.PI, canvas.width / canvas.height, 0.1, 300);
+
+      const cameraMatrix = mat4.create();
+      mat4.targetTo(cameraMatrix, vec3.fromValues(0.0, 0.0, 10.0), vec3.fromValues(0, 0, 0), vec3.fromValues(0, 1, 0));
+      const viewMatrix = mat4.create();
+      mat4.invert(viewMatrix, cameraMatrix);
+
+      const viewProjectionMatrix = mat4.create();
+      mat4.mul(viewProjectionMatrix, projectionMatrix, viewMatrix);
+
+      const program = createProgram(gl,
+        createShader(gl,vertShaderSource, gl.VERTEX_SHADER),
+        createShader(gl, fragShaderSource, gl.FRAGMENT_SHADER)
+      );
+
+      const attribLocs = getAttribLocs(gl, program, ['aPosition', 'aNormal', 'aInstanceMatrix', 'aInstanceNormalMatrix', 'aInstanceColor']);
+      const uniformLocs = getUniformLocs(gl, program, ['uViewProjectionMatrix']);
+
+      const torus = createTorus(1, 0.3, 32, 16);
+      const torusNum = 1000;
+
+      const instanceMatArray = [];
+      const instanceNormalMatArray = [];
+      const instanceColorArray = [];
+      for (let i = 0; i < torusNum; ++i) {
+        const instanceMat = mat4.create();
+        const rotation = quat.create();
+        quat.fromEuler(rotation, 360 * Math.random(), 360 * Math.random(), 360 * Math.random());
+        const translation = vec3.fromValues(50.0 * (2.0 * Math.random() - 1.0), 50.0 * (2.0 * Math.random() - 1.0), 50.0 * (2.0 * Math.random() - 1.0));
+        const scale = vec3.fromValues(0.5 + 1.5 * Math.random(), 0.5 + 1.5 * Math.random(), 0.5 + 1.5 * Math.random());
+        mat4.fromRotationTranslationScale(instanceMat, rotation, translation, scale);
+        instanceMatArray.push(...instanceMat);
+        const instanceNormalMat = mat3.create();
+        mat3.fromMat4(instanceNormalMat, instanceMat);
+        mat3.transpose(instanceNormalMat, instanceNormalMat);
+        mat3.invert(instanceNormalMat, instanceNormalMat);
+        instanceNormalMatArray.push(...instanceNormalMat);
+        instanceColorArray.push(Math.random(), Math.random(), Math.random());
+      }
+
+      const positionVbo = createVbo(gl, torus.positions);
+      const normalVbo = createVbo(gl, torus.normals);
+      const instanceMatVbo = createVbo(gl, new Float32Array(instanceMatArray));
+      const instanceNormalMatVbo = createVbo(gl, new Float32Array(instanceNormalMatArray));
+      const instanceColorVbo = createVbo(gl, new Float32Array(instanceColorArray));
+      const ibo = createIbo(gl, torus.indices);
+
+      const vao = extVertexArrayObject.bindVertexArrayOES();
+      extVertexArrayObject.bindVertexArrayOES(vao);
+      gl.bindBuffer(gl.ARRAY_BUFFER, positionVbo);
+      gl.enableVertexAttribArray(attribLocs.get('aPosition'));
+      gl.vertexAttribPointer(attribLocs.get('aPosition'), 3, gl.FLOAT, false, 0, 0);
+      gl.bindBuffer(gl.ARRAY_BUFFER, normalVbo);
+      gl.enableVertexAttribArray(attribLocs.get('aNormal'));
+      gl.vertexAttribPointer(attribLocs.get('aNormal'), 3, gl.FLOAT, false, 0, 0);
+      gl.bindBuffer(gl.ARRAY_BUFFER, instanceMatVbo);
+      gl.enableVertexAttribArray(attribLocs.get('aInstanceMatrix'));
+      gl.enableVertexAttribArray(attribLocs.get('aInstanceMatrix') + 1);
+      gl.enableVertexAttribArray(attribLocs.get('aInstanceMatrix') + 2);
+      gl.enableVertexAttribArray(attribLocs.get('aInstanceMatrix') + 3);
+      gl.vertexAttribPointer(attribLocs.get('aInstanceMatrix'), 4, gl.FLOAT, false, 64, 0);
+      gl.vertexAttribPointer(attribLocs.get('aInstanceMatrix') + 1, 4, gl.FLOAT, false, 64, 16);
+      gl.vertexAttribPointer(attribLocs.get('aInstanceMatrix') + 2, 4, gl.FLOAT, false, 64, 32);
+      gl.vertexAttribPointer(attribLocs.get('aInstanceMatrix') + 3, 4, gl.FLOAT, false, 64, 48);
+      extInstancedArray.vertexAttribDivisorANGLE(attribLocs.get('aInstanceMatrix'), 1);
+      extInstancedArray.vertexAttribDivisorANGLE(attribLocs.get('aInstanceMatrix') + 1, 1);
+      extInstancedArray.vertexAttribDivisorANGLE(attribLocs.get('aInstanceMatrix') + 2, 1);
+      extInstancedArray.vertexAttribDivisorANGLE(attribLocs.get('aInstanceMatrix') + 3, 1);
+      gl.bindBuffer(gl.ARRAY_BUFFER, instanceNormalMatVbo);
+      gl.enableVertexAttribArray(attribLocs.get('aInstanceNormalMatrix'));
+      gl.enableVertexAttribArray(attribLocs.get('aInstanceNormalMatrix') + 1);
+      gl.enableVertexAttribArray(attribLocs.get('aInstanceNormalMatrix') + 2);
+      gl.vertexAttribPointer(attribLocs.get('aInstanceNormalMatrix'), 3, gl.FLOAT, false, 36, 0);
+      gl.vertexAttribPointer(attribLocs.get('aInstanceNormalMatrix') + 1, 3, gl.FLOAT, false, 48, 12);
+      gl.vertexAttribPointer(attribLocs.get('aInstanceNormalMatrix') + 2, 3, gl.FLOAT, false, 48, 24);
+      extInstancedArray.vertexAttribDivisorANGLE(attribLocs.get('aInstanceNormalMatrix'), 1);
+      extInstancedArray.vertexAttribDivisorANGLE(attribLocs.get('aInstanceNormalMatrix') + 1, 1);
+      extInstancedArray.vertexAttribDivisorANGLE(attribLocs.get('aInstanceNormalMatrix') + 2, 1);
+      gl.bindBuffer(gl.ARRAY_BUFFER, instanceColorVbo);
+      gl.enableVertexAttribArray(attribLocs.get('aInstanceColor'));
+      gl.vertexAttribPointer(attribLocs.get('aInstanceColor'), 3, gl.FLOAT, false, 0, 0);
+      extInstancedArray.vertexAttribDivisorANGLE(attribLocs.get('aInstanceColor'), 1);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
+      extVertexArrayObject.bindVertexArrayOES(null);
+
+      gl.enable(gl.CULL_FACE);
+      gl.cullFace(gl.BACK);
+      gl.enable(gl.DEPTH_TEST);
+
+      let mouseX = 0;
+      let mouseY = 0;
+
+      function resize() {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        gl.viewport(0, 0, canvas.width, canvas.height);
+
+        mat4.perspective(projectionMatrix, 90.0 / 180.0 * Math.PI, canvas.width / canvas.height, 0.1, 300);
+        mat4.mul(viewProjectionMatrix, projectionMatrix, viewMatrix);
+      }
+      window.addEventListener('resize', resize);
+
+      function mousemove(e) {
+        mouseX = 2.0 * (e.clientX / canvas.width) - 1.0;
+        mouseY = 2.0 * (1.0 - e.clientY / canvas.height) - 1.0;
+      }
+      window.addEventListener('mousemove', mousemove);
+
+
+      function animate() {
+        requestAnimationFrame(animate);
+
+        mat4.targetTo(cameraMatrix, vec3.fromValues(mouseX * 100.0, mouseY * 100.0, 50.0), vec3.fromValues(0, 0, 0), vec3.fromValues(0, 1, 0));
+        mat4.invert(viewMatrix, cameraMatrix);
+
+        const viewProjectionMatrix = mat4.create();
+        mat4.mul(viewProjectionMatrix, projectionMatrix, viewMatrix);
+
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+        extVertexArrayObject.bindVertexArrayOES(vao);
+        gl.useProgram(program);
+        gl.uniformMatrix4fv(uniformLocs.get('uViewProjectionMatrix'), false, viewProjectionMatrix);
+        extInstancedArray.drawElementsInstancedANGLE(gl.TRIANGLES, torus.indices.length, gl.UNSIGNED_SHORT, 0, torusNum);
+        extVertexArrayObject.bindVertexArrayOES(null);
+      }
+      animate();
+
+    </script>
+  </body>
+</html>
